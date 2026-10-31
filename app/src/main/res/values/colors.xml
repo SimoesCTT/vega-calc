@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bodyDark">#2B2B2B</color>
+    <color name="lcdBg">#C8D6A2</color>
+    <color name="lcdText">#161C10</color>
+    <color name="keyNum">#3C3C3C</color>
+    <color name="keyFn">#555555</color>
+    <color name="keyOp">#E58C2F</color>
+    <color name="keyAc">#B04040</color>
+    <color name="keyText">#FFFFFF</color>
+    <color name="vegaBlue">#7FB2D9</color>
+    <color name="vegaBlueDeep">#4A7FA8</color>
+</resources>

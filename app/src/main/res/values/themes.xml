@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Vega" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#2B2B2B</item>
+        <item name="android:windowBackground">#2B2B2B</item>
+    </style>
+</resources>

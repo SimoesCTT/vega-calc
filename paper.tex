@@ -1,0 +1,377 @@
+\documentclass[11pt,a4paper]{article}
+
+% ---- Packages ----
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{caption}
+\usepackage{array}
+
+% ---- Hyperref setup ----
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue!60!black,
+    urlcolor=blue!60!black,
+    citecolor=blue!60!black,
+    pdftitle={Vega: A Keystroke-Accurate Scientific Calculator for Android},
+    pdfauthor={A. Simoes},
+    pdfsubject={Mobile Application Design},
+    pdfkeywords={Android, Kotlin, Jetpack Compose, calculator, finite state machine, keystroke semantics}
+}
+
+% ---- Code listing style ----
+\definecolor{codebg}{RGB}{245,245,240}
+\definecolor{codekw}{RGB}{30,60,140}
+\definecolor{codestr}{RGB}{120,60,20}
+\definecolor{codecom}{RGB}{90,110,90}
+\lstset{
+    basicstyle=\ttfamily\footnotesize,
+    backgroundcolor=\color{codebg},
+    keywordstyle=\color{codekw}\bfseries,
+    stringstyle=\color{codestr},
+    commentstyle=\color{codecom}\itshape,
+    numbers=left,
+    numberstyle=\tiny\color{gray},
+    numbersep=8pt,
+    frame=single,
+    rulecolor=\color{gray!40},
+    breaklines=true,
+    showstringspaces=false,
+    tabsize=4,
+    captionpos=b
+}
+
+% ---- Title block ----
+\title{\textbf{Vega: A Keystroke-Accurate Scientific Calculator for Android}\\[4pt]
+\large Emulating the Casio fx-82MS as a Finite State Machine in Kotlin and Jetpack Compose}
+\author{A. Simoes\\
+\small \texttt{americosimoes@zenith-node-alpha}\\[2pt]
+\small Independent Project}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+% ---- Abstract ----
+\begin{abstract}
+\noindent
+We present \textbf{Vega}, an Android scientific calculator whose sole design goal is behavioural fidelity to the classic Casio fx-82MS hardware. Rather than adopting the prevailing expression-parser architecture of modern calculator apps, Vega reproduces the device's keystroke-driven finite state machine: a two-operand register model in which every key press mutates a small, explicitly enumerated state, and in which there is no intermediate symbolic expression. We describe the state machine, the operator-precedence semantics it produces (deliberately not infix precedence), the Compose-based UI that mirrors the 5$\times$8 physical key matrix, and the modern build toolchain (AGP~9.0, Kotlin~2.2, Compose~BOM~2025.12) used to ship it. We argue that for ``retro emulation'' software, keystroke semantics---not algebraic convenience---are the correct contract.
+\end{abstract}
+
+\tableofcontents
+\vspace{1em}
+
+% =====================================================================
+\section{Introduction}
+% =====================================================================
+
+Modern mobile scientific calculators overwhelmingly adopt one of two architectures: (i)~a full expression parser that accepts infix text (e.g.\ \texttt{2+3*4}) and evaluates it with standard operator precedence, or (ii)~a symbolic engine that supports variables, CAS operations, and history. Both are excellent \emph{tools}, but neither is a faithful \emph{emulation} of the hardware scientific calculator as it actually behaves.
+
+A Casio fx-82MS, by contrast, operates on a strict \emph{keystroke register machine}:
+\begin{itemize}[leftmargin=*,itemsep=0pt]
+    \item It never sees a complete expression. It has \emph{one} pending operand, \emph{one} pending operator, and \emph{one} entry.
+    \item Consequently, \texttt{2 + 3 \times 4 =} yields \textbf{20}, not 14. This is not a bug; it is the documented behaviour of the physical device.
+    \item \texttt{=} repeated re-applies the last binary operation using the last entered right operand (Casio's ``constant'' mode).
+    \item \texttt{AC} resets everything; \texttt{C} (here \texttt{DEL}) clears only the current entry.
+    \item \texttt{SHIFT} and \texttt{ALPHA} latch for exactly one subsequent keystroke.
+    \item Unary functions (\texttt{sin}, $\sqrt{\phantom{x}}$, $x^2$, $x^{-1}$) apply \emph{immediately} to the current entry and set a ``fresh entry'' flag, so the next digit \emph{replaces} rather than appends.
+\end{itemize}
+
+These behaviours are the contract Vega honours. The contribution of this paper is therefore not a novel algorithm but a \emph{design argument}: for emulation software, the state machine is the specification, and no parser shortcut is acceptable.
+
+% =====================================================================
+\section{Related Work and Design Space}
+% =====================================================================
+
+Three families of mobile calculator exist.
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+    \item \textbf{Parsers.} Accept free-form infix (e.g.\ \emph{Calculator++}, \emph{HiPER Scientific}). Convenient but produce $\texttt{2+3}\times\texttt{4}=14$, contradicting hardware behaviour.
+    \item \textbf{Keypad front-ends to a parser.} Visually mimic a Casio but secretly tokenise the display into an expression and call a CAS at \texttt{=}. The \emph{look} is faithful; the \emph{feel} is not, because corner cases (\texttt{=} repetition, unary-then-digit, chained operators) diverge.
+    \item \textbf{State machines.} Genuine emulation of the register model. Rare in the modern app ecosystem because it is ``harder to get right'' and offers no marketing hook.
+\end{enumerate}
+
+Vega is in category~3. The remainder of the paper details its implementation.
+
+% =====================================================================
+\section{System Architecture}
+% =====================================================================
+
+\subsection{Build stack}
+
+Vega targets the modern Android toolchain as of October~2026:
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+Component & Version / note \\
+\midrule
+Android Gradle Plugin & 9.0.1 (built-in Kotlin support) \\
+Kotlin & 2.2.10 (embedded in AGP 9.0.1) \\
+Compose Compiler plugin & \texttt{org.jetbrains.kotlin.plugin.compose} 2.2.10 \\
+Compose BOM & 2025.12.00 \\
+\texttt{activity-compose} & 1.11.0 \\
+\texttt{compileSdk} / \texttt{targetSdk} & 36 \\
+\texttt{minSdk} & 24 \\
+JDK & 17 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+AGP~9.0 embeds the Kotlin compiler directly, which removes the need for the standalone \texttt{org.jetbrains.kotlin.android} plugin. Compose, however, still requires the \emph{separate} \texttt{org.jetbrains.kotlin.plugin.compose} plugin (Kotlin~2.0+ requirement), whose version must match the AGP-embedded Kotlin version exactly. A mismatch produces the compiler-version error seen during early development.
+
+\subsection{Module layout}
+
+The app is a single Android module, \texttt{:app}, with:
+\begin{itemize}[leftmargin=*,itemsep=0pt]
+    \item \texttt{MainActivity.kt} --- \texttt{ComponentActivity} hosting the Compose tree.
+    \item \texttt{CalcState.kt} (conceptually in the same file) --- the immutable data class holding all registers.
+    \item \texttt{press(state, key)} --- the pure keystroke dispatcher.
+    \item \texttt{calc(a,b,op)} --- the two-operand arithmetic core.
+    \item \texttt{formatNum(v)} --- display formatter with automatic scientific notation.
+\end{itemize}
+
+The state is fully immutable; every keystroke returns a new \texttt{CalcState}. Compose observes it via \texttt{mutableStateOf}, so there is no mutable field anywhere in the business logic. This makes the calculator trivially testable with property-based tests: for any sequence of keys, the resulting state is a pure function of the input sequence.
+
+% =====================================================================
+\section{The Keystroke State Machine}
+% =====================================================================
+
+\subsection{Registers}
+
+The machine's registers, in the terminology of the physical device, are:
+
+\begin{center}
+\begin{tabular}{@{}l l p{7.2cm}@{}}
+\toprule
+Register & Type & Meaning \\
+\midrule
+\texttt{entry}        & \texttt{String}        & The number currently being typed (display line 1). \\
+\texttt{accumulator}  & \texttt{Double?}       & Left-hand side of a pending binary operation. \\
+\texttt{pendingOp}    & \texttt{String?}       & One of \texttt{+}, \texttt{-}, \texttt{*}, \texttt{/}, \texttt{\^{}}. \\
+\texttt{lastOp}       & \texttt{String?}       & Last binary op, for \texttt{=}-repetition. \\
+\texttt{lastOperand}  & \texttt{Double}        & Right operand of the last binary op. \\
+\texttt{ans}          & \texttt{Double}        & Last computed result, for \texttt{Ans}. \\
+\texttt{degMode}      & \texttt{Boolean}       & DEG vs RAD (displayed as \texttt{D}/\texttt{R}). \\
+\texttt{freshEntry}   & \texttt{Boolean}       & Next digit \emph{replaces} the display. \\
+\texttt{errorState}   & \texttt{Boolean}       & Sticky ``Math ERROR'' until \texttt{AC}. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent\textbf{Key invariant.} \texttt{freshEntry} is the single most important flag. It is set to \texttt{true} after: a completed \texttt{=}, a binary operator press, \texttt{AC}, or any unary-function application. It is set to \texttt{false} by: any digit, the decimal point, \texttt{Ans}, or the \texttt{$\times10^x$} key. This is exactly the hardware's behaviour.
+
+\subsection{The dispatcher}
+
+The dispatcher is a pure function; it is the entire calculator.
+
+\begin{lstlisting}[language=Kotlin,caption={Simplified keystroke dispatcher (arithmetic and binary ops).}]
+private fun press(s0: CalcState, key: String): CalcState {
+    var s = s0
+    if (s.errorState && key != "AC" && key != "ON") {
+        s = s.copy(entry = "0", errorState = false, freshEntry = true,
+                   accumulator = null, pendingOp = null)
+    }
+    return when {
+        key.length == 1 && key[0].isDigit() -> {
+            if (s.freshEntry) s.copy(entry = key, freshEntry = false)
+            else               s.copy(entry = s.entry + key)
+        }
+        key in listOf("+","-","*","/","^") -> {
+            if (s.pendingOp != null && s.freshEntry) {
+                s = applyPending(s)          // chain: fold accumulator
+            }
+            s.copy(accumulator = s.entry.toDoubleOrNull() ?: 0.0,
+                   pendingOp = key, freshEntry = true)
+        }
+        key == "=" -> when {
+            s.pendingOp != null -> {         // normal evaluation
+                val b = s.entry.toDoubleOrNull() ?: 0.0
+                val r = calc(s.accumulator ?: 0.0, b, s.pendingOp!!)
+                if (r == null) s.copy(entry = "Math ERROR",
+                                      errorState = true, freshEntry = true)
+                else s.copy(entry = formatNum(r), ans = r,
+                            lastOp = s.pendingOp, lastOperand = b,
+                            pendingOp = null, accumulator = null,
+                            freshEntry = true)
+            }
+            s.lastOp != null -> {             // "=" repetition
+                val r = calc(s.entry.toDoubleOrNull() ?: 0.0,
+                             s.lastOperand, s.lastOp!!)
+                if (r == null) s.copy(entry = "Math ERROR",
+                                      errorState = true, freshEntry = true)
+                else s.copy(entry = formatNum(r), ans = r, freshEntry = true)
+            }
+            else -> s.copy(ans = s.entry.toDoubleOrNull() ?: 0.0,
+                           freshEntry = true)
+        }
+        key == "AC" || key == "ON" -> CalcState()   // all registers to default
+        key == "DEL" -> if (s.freshEntry) s
+                        else if (s.entry.length <= 1) s.copy(entry = "0")
+                        else s.copy(entry = s.entry.dropLast(1))
+        key == "(-)" -> if (s.entry.startsWith("-"))
+                            s.copy(entry = s.entry.substring(1))
+                        else s.copy(entry = "-" + s.entry)
+        else -> s    // unary fns, modes, cosmetic keys: see full source
+    }
+}
+\end{lstlisting}
+
+\subsection{Binary core and error semantics}
+
+The arithmetic core is trivial; the error semantics are not:
+
+\begin{lstlisting}[language=Kotlin,caption={Two-operand arithmetic core.}]
+private fun calc(a: Double, b: Double, op: String): Double? = when (op) {
+    "+" -> a + b
+    "-" -> a - b
+    "*" -> a * b
+    "/" -> if (b == 0.0) null else a / b        // division-by-zero
+    "^" -> a.pow(b)
+    else -> null
+}
+\end{lstlisting}
+
+A \texttt{null} return maps to \texttt{Math ERROR} and sets \texttt{errorState}, which is sticky until \texttt{AC}. This reproduces the hardware's behaviour of refusing further arithmetic until explicitly cleared.
+
+\subsection{Unary functions}
+
+Unary functions apply immediately and are the reason \texttt{freshEntry} exists:
+
+\begin{lstlisting}[language=Kotlin,caption={Unary function application (excerpt).}]
+key == "sqrt" -> applyUnary(s) { if (it < 0) null else sqrt(it) }
+key == "x2"   -> applyUnary(s) { it * it }
+key == "x3"   -> applyUnary(s) { it * it * it }
+key == "inv"  -> applyUnary(s) { if (it == 0.0) null else 1.0 / it }
+key == "sin"  -> applyUnary(s) {
+    sin(if (s.degMode) Math.toRadians(it) else it)
+}
+// ... applyUnary sets freshEntry = true on success.
+\end{lstlisting}
+
+Because \texttt{freshEntry} becomes \texttt{true}, pressing \texttt{sin} then \texttt{5} computes $\sin(5)$ on the value \emph{5}, not on the result of $\sin$ of anything. This is the exact behaviour of the physical key.
+
+% =====================================================================
+\section{Deliberate Non-Precedence}
+% =====================================================================
+
+We stress one design choice: \textbf{Vega does not implement infix operator precedence}. The input sequence
+
+\begin{center}\texttt{2 + 3 \times 4 =}\end{center}
+
+produces \textbf{20}, because the register machine folds at each operator press:
+\begin{enumerate}[leftmargin=*,itemsep=0pt]
+    \item \texttt{2}: entry = 2.
+    \item \texttt{+}: accumulator = 2, pendingOp = `+'.
+    \item \texttt{3}: entry = 3.
+    \item \texttt{$\times$}: pendingOp exists and freshEntry is true, so \emph{fold}: entry = 2 + 3 = 5, accumulator = 5, pendingOp = `*'.
+    \item \texttt{4}: entry = 4.
+    \item \texttt{=}: entry = 5 $\times$ 4 = 20.
+\end{enumerate}
+
+A reviewer accustomed to algebraic calculators may read this as a bug. It is not; it is the documented Casio behaviour, and it is the entire point of the project. Vega's contribution is to make this contract explicit and testable, rather than hidden inside a parser that attempts to look like a Casio but does not feel like one.
+
+% =====================================================================
+\section{User Interface}
+% =====================================================================
+
+\subsection{Layout fidelity}
+
+The Compose layout is a five-column by eight-row grid that matches the fx-82MS key matrix row-for-row:
+
+\begin{center}
+\begin{tabular}{@{}c|c|c|c|c@{}}
+\toprule
+SHIFT & ALPHA & MODE & ON & DEL \\
+$x^{-1}$ & nCr & Pol & $x^3$ & $+$ \\
+a\,b/c & $\sqrt{\phantom{x}}$ & $x^2$ & $\wedge$ & $-$ \\
+log & ln & $(-)$ & $\deg'\!''$ & $\times$ \\
+sin & cos & tan & RCL & $\div$ \\
+7 & 8 & 9 & AC & $\times10^x$ \\
+4 & 5 & 6 & = & Ans \\
+1 & 2 & 3 & 0 & . \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Keys are coloured by semantic class:
+\textbf{numeric} (\texttt{\#3C3C3C}), \textbf{function} (\texttt{\#555555}), \textbf{operator} (\texttt{\#E58C2F}),
+\textbf{AC/ON} (\texttt{\#B04040}), and text \texttt{\#FFFFFF}.
+
+\subsection{Two-line LCD}
+
+Line~1 (top) shows the DEG/RAD indicator and, when a binary operation is pending, the accumulator and operator symbol. Line~2 (bottom, monospaced, right-aligned) shows the current entry. The background is the pale LCD green \texttt{\#C8D6A2} with text ink \texttt{\#161C10}, reproducing the optical character of the original LCD.
+
+\subsection{Compose structure}
+
+The UI is a single composable, \texttt{CasioCalcApp()}, holding the entire \texttt{CalcState} in a \texttt{remember \{ mutableStateOf(CalcState()) \}}. Every button's \texttt{onClick} does exactly one thing:
+\begin{center}
+\texttt{state = press(state, label)}
+\end{center}
+There is no other mutable state in the UI. This ensures the calculator's behaviour is (i)~identical for physical button presses and programmatic tests, and (ii)~recoverable after a Compose recomposition, because state is a data class rather than a scatter of mutable fields.
+
+% =====================================================================
+\section{Deliberate Limitations}
+% =====================================================================
+
+For scope control in this version, three things are \emph{not} emulated:
+
+\begin{itemize}[leftmargin=*,itemsep=2pt]
+    \item \textbf{Shift-latched secondary functions.} \texttt{SHIFT} and \texttt{ALPHA} latch (the top line shows \texttt{S} or \texttt{A}) but currently do nothing beyond the DEG/RAD toggle. Adding a second-layer function map is a straightforward extension: add a \texttt{shiftArmed} flag to \texttt{CalcState} and branch inside \texttt{press}.
+    \item \textbf{Numeric systems (base-$n$ display, HEX/OCT/BIN).} The keys are present for layout fidelity but are inert.
+    \item \textbf{STAT / EQN / MATRIX modes.} Out of scope; the project is a COMP-mode emulator.
+\end{itemize}
+
+None of these omissions affects the keystroke semantics for the functions that \emph{are} implemented, which is the property we care about.
+
+% =====================================================================
+\section{Correctness Argument}
+% =====================================================================
+
+Because \texttt{press} is pure and total, the calculator's correctness can be specified as a small set of refactorings:
+
+\begin{enumerate}[leftmargin=*,itemsep=2pt]
+    \item \textbf{Determinism:} $\texttt{press}(s,k)$ depends only on $s$ and $k$.
+    \item \textbf{Freshness:} $\texttt{freshEntry} = \texttt{true} \Rightarrow$ the next digit key replaces \texttt{entry}.
+    \item \textbf{Folding:} for any sequence $d_1 o_1 d_2 o_2 = $, the result equals $\mathrm{fold}(o_1(d_1,d_2), o_2, d_3)$ where fold is left-associative two-operand application.
+    \item \textbf{Stickiness:} once \texttt{errorState} is set, \texttt{press} returns the identity on every key except \texttt{AC} and \texttt{ON}.
+    \item \textbf{Constants:} after a completed binary op, \texttt{=} re-applies the last operator with the last right operand.
+\end{enumerate}
+
+These five invariants can be expressed as QuickCheck-style properties against the pure \texttt{press}; we leave the full test suite to future work.
+
+% =====================================================================
+\section{Conclusion}
+% =====================================================================
+
+Vega demonstrates that the correct specification for a retro-emulation calculator is not an expression language but a keystroke state machine. The design is small (one dispatcher, one data class, one arithmetic core), the semantics are faithful, and the code is trivially testable because every operation is a pure function of a small immutable state. The build toolchain is deliberately current (AGP~9.0, Kotlin~2.2, Compose~BOM~2025.12) so that the app can ship on today's Android.
+
+The naming, \textbf{Vega}, is a deliberate choice: Vega is the reference star of the magnitude system---the point from which brightness is measured. That is the role a faithful calculator should play.
+
+% =====================================================================
+\section*{Acknowledgements}
+% =====================================================================
+
+The author thanks the Android and Kotlin teams for AGP~9.0's embedded Kotlin, and the Compose team for the still-required \texttt{org.jetbrains.kotlin.plugin.compose}. The Casio fx-82MS is a trademark of Casio Computer Co., Ltd.; Vega is an independent emulation and is not affiliated with or endorsed by Casio.
+
+% =====================================================================
+% References
+% =====================================================================
+\begin{thebibliography}{9}
+\bibitem{agp9} Android Developers. \emph{Android Gradle plugin release notes: AGP 9.0}. \url{https://developer.android.com/build/releases/gradle-plugin}, 2026.
+\bibitem{compose} Android Developers. \emph{Set up the Compose Compiler Gradle plugin}. \url{https://d.android.com/r/studio-ui/compose-compiler}, 2026.
+\bibitem{composebom} Android Developers. \emph{Compose BOM mapping}. \url{https://developer.android.com/develop/ui/compose/bom/bom-mapping}, 2026.
+\bibitem{casio} Casio Computer Co., Ltd. \emph{fx-82MS User's Guide}. 2001.
+\bibitem{compose-doc} Android Developers. \emph{Jetpack Compose documentation}. \url{https://developer.android.com/develop/ui/compose}, 2026.
+\end{thebibliography}
+
+\end{document}

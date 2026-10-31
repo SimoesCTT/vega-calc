@@ -1,0 +1,18 @@
+\contentsline {section}{\numberline {1}Introduction}{2}{section.1}%
+\contentsline {section}{\numberline {2}Related Work and Design Space}{2}{section.2}%
+\contentsline {section}{\numberline {3}System Architecture}{2}{section.3}%
+\contentsline {subsection}{\numberline {3.1}Build stack}{2}{subsection.3.1}%
+\contentsline {subsection}{\numberline {3.2}Module layout}{3}{subsection.3.2}%
+\contentsline {section}{\numberline {4}The Keystroke State Machine}{3}{section.4}%
+\contentsline {subsection}{\numberline {4.1}Registers}{3}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}The dispatcher}{4}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Binary core and error semantics}{5}{subsection.4.3}%
+\contentsline {subsection}{\numberline {4.4}Unary functions}{5}{subsection.4.4}%
+\contentsline {section}{\numberline {5}Deliberate Non-Precedence}{5}{section.5}%
+\contentsline {section}{\numberline {6}User Interface}{6}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Layout fidelity}{6}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Two-line LCD}{6}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Compose structure}{6}{subsection.6.3}%
+\contentsline {section}{\numberline {7}Deliberate Limitations}{6}{section.7}%
+\contentsline {section}{\numberline {8}Correctness Argument}{7}{section.8}%
+\contentsline {section}{\numberline {9}Conclusion}{7}{section.9}%
